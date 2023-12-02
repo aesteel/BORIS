@@ -1,0 +1,295 @@
+---
+title: "BORIS_analyses"
+output: 
+  html_document: 
+    theme: cerulean
+    number_sections: yes
+date: "2023-11-27"
+---
+
+```{r include=FALSE}
+# install.packages("tidyverse", dependencies = T)
+# install.packages("ggthemes")
+library(tidyverse)
+library(ggthemes)
+library(colorspace)
+
+#---- DATA FROM DATASHEETS ----
+
+#export the list of all trials r1, r2 and r3 for the meeting early December
+mtg_trial_ID <- read_tsv("./Full_trial_list.tsv") |> 
+  filter(Replicates %in% c("r1","r2","r3")) |> 
+  filter(Camera_nb == "Camera2") |> 
+  filter(Data_analysis != "N") |> 
+  pull(ID)
+
+#import the 3 files for Small, Medium and Large size classes from datasheets
+datasheet_files <- read_tsv(c("Treadmill_Fish_Contact - Trial_Observations_cohort2_small_6-10cm.tsv",
+                            "Treadmill_Fish_Contact - Trial_Observations_cohort2_medium_11-15cm.tsv",
+                            "Treadmill_Fish_Contact - Trial_Observations_cohort2_large_16-20cm.tsv"))
+colnames(datasheet_files)
+#keep only metadata for BORIS analysis
+metadata <- datasheet_files |> 
+  select(c(Trial_ID_cam2,Trial_ID_cam4,Size_class,Replicate,Treatment,Dial_phase,Water_Temp_Tread,
+           DO_Tread_mgL,Water_Temp_JC,DO_JC_mgL,Lux,Video_File_Name)) |> 
+  distinct() #remove duplicates in rows
+#double check
+sum(metadata$Size_class == "Small")
+sum(metadata$Size_class == "Medium")
+sum(metadata$Size_class == "Large")
+
+#filter by mtg_trial_ID (keep only r1, r2 and r3 trials)
+boris_metadata <- metadata |> 
+  filter(Trial_ID_cam2 %in% mtg_trial_ID)
+```
+
+# Importing data
+
+Double check the number of videos analyzed per size class.
+
+Considering only r1, r2 and r3 videos, we should have for Small, Medium and Large respectively 25/25/24.
+
+```{r echo=TRUE}
+sum(boris_metadata$Size_class == "Small")
+sum(boris_metadata$Size_class == "Medium")
+sum(boris_metadata$Size_class == "Large")
+```
+
+```{r include=FALSE}
+#---- DATA FROM BORIS ----
+
+#import the list of the .tsv files exported from BORIS (only from video analyzed)
+HD_file_list <- list.files(".", pattern = "cam2", recursive = T)
+#filter by mtg_trial_ID (keep only r1, r2 and r3 trials)
+HD_file_list = grep(paste(mtg_trial_ID, collapse="|"), HD_file_list, value = TRUE)
+
+#change column names using a vector while creating a large tibble to avoid errors
+col_names <- c("Observation_id","Observation_date","Description","Observation_type",
+               "Source","Total_duration","Media_duration_s","FPS_frame_s","Date",
+               "Trial_Letter","Camera_#","Subject","Observation_duration_by_subject_by_observation",
+               "Behavior","Behavioral_category","Behavior_type","Start_s","Stop_s","Duration_s",
+               "Media_file_name","Image_index_start","Image_index_stop","Image_file_path_start",
+               "Image_file_path_stop","Comment_start","Comment_stop")
+
+#create a tibble with all the data 
+boris_files <- read_tsv(HD_file_list, skip = 1, col_names = col_names, col_types = "cTcccdddccccdcccdddcddcccc") %>%
+  mutate(Date = as.Date(Date, format = "%Y%m%d")) |> 
+  select(-c(Observation_date,Description,Observation_type,Image_index_start,Image_index_stop,Image_file_path_start,Image_file_path_stop))
+#double check the tibble and column types
+str(boris_files)
+#if any errors
+problems(boris_files)
+
+#---- MERGE BOTH TIBBLES ----
+
+boris <- merge(boris_files, boris_metadata, by.x = "Observation_id", by.y = "Trial_ID_cam2")
+```
+
+
+Visualization of the whole dataset:
+
+```{r echo=FALSE}
+glimpse(boris)
+```
+
+
+Double check consistency between video file name manually entered (column called "Video_File_Name") and video file path (column called "Media_file_name").
+
+```{r include=FALSE}
+#double check consistency between video and media file names columns (because entered manually 2 different times)
+boris$Media_file_name
+boris$Video_File_Name
+#loop to check for each row if the pattern Video_File_Name is well found in the Media_file_name path
+tmp = map2_lgl(
+  boris$Video_File_Name,
+  boris$Media_file_name,
+  function(pattern, x) grepl(pattern, x, ignore.case = T) #looking for the pattern (video file name) in each x (media file name)
+)
+```
+=> number of errors:
+```{r echo=FALSE}
+sum(!tmp)
+
+#export tibble
+#write_tsv(boris, "BORIS_large_dataset_r1r2r3.tsv")
+```
+
+
+# What type of velocity treatments make them fatigued faster?
+
+
+**TO DO: remove rows where fish were resting then probed**
+
+
+```{r include=FALSE}
+#---- FIGURES ----
+
+#Prep data
+
+#data
+tmp <- boris |> 
+  filter(Behavior == "resting") |> 
+  group_by(Size_class, Dial_phase, Treatment)
+#check column types
+typeof(tmp$Duration_s)
+tmp$Treatment <- factor(tmp$Treatment, levels = c("0.2A_0.8S","0.2A_2S","0.4A_0.8S","0.4A_2S"))
+tmp$Size_class <- factor(tmp$Size_class, levels = c("Small","Medium","Large"))
+tmp$Dial_phase <- factor(tmp$Dial_phase, levels = c("Day","Night"))
+
+#remove rows where fish were resting then were probed
+#TO DO!!!!!
+```
+
+## Number of fish resting per treatment
+
+```{r echo=FALSE, fig.height=4, fig.width=5}
+ggplot(tmp, aes(x = Treatment, fill = Treatment)) +
+  geom_bar() +
+  labs(x = "Treatment", y = "Resting fish counts") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_fill_discrete_qualitative(palette = "Set 3") + #https://arxiv.org/pdf/1903.06490.pdf
+  theme_classic()
+#ggsave("figures/resting_total_nb.pdf", width = 5, height = 4)
+```
+
+Results below:
+
+```{r echo=FALSE}
+#double check with values: nb of fish resting per treatment
+boris |> 
+  filter(Behavior == "resting") |> 
+  group_by(Treatment) |> 
+  count() #nb of rows = nb of fish resting
+```
+
+
+## Number of fish resting per treatment per size class
+
+```{r echo=FALSE, fig.height=5, fig.width=10}
+#figure 2
+ggplot(tmp, aes(x = Treatment, fill = Treatment)) +
+  geom_bar() +
+  facet_grid(cols = vars(Size_class)) +
+  labs(x = "Treatment", y = "Resting fish counts") +
+  scale_y_continuous(limits = c(0, 60), expand = c(0, 0)) +
+  scale_fill_discrete_qualitative(palette = "Set 3") + #https://arxiv.org/pdf/1903.06490.pdf
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#ggsave("figures/resting_nb_per_sizeclass.pdf", width = 10, height = 5)
+```
+
+Results below:
+
+```{r echo=FALSE}
+#double check with values: nb of fish resting per treatment per size class
+boris |> 
+  filter(Behavior == "resting") |> 
+  group_by(Size_class, Treatment) |> 
+  count() #nb of rows = nb of fish resting
+```
+
+
+## Number of fish resting per treatment per size class per dial phase
+
+```{r echo=FALSE, fig.height=7, fig.width=7}
+#figure 3
+ggplot(tmp, aes(x = Treatment, fill = Treatment)) +
+  geom_bar() +
+  facet_grid(vars(Size_class), vars(Dial_phase)) +
+  labs(x = "Treatment", y = "Resting fish counts") +
+  scale_y_continuous(limits = c(0, 40), expand = c(0, 0)) +
+  scale_fill_discrete_qualitative(palette = "Set 3") + #https://arxiv.org/pdf/1903.06490.pdf
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#ggsave("figures/resting_nb_per_sizeclass_and_dial_phase.pdf", width = 7, height = 7)
+```
+
+Results below:
+
+```{r echo=FALSE}
+#double check with values: nb of fish resting per treatment per size class per dial phase
+boris |> 
+  filter(Behavior == "resting") |> 
+  group_by(Size_class, Dial_phase, Treatment) |> 
+  count() #nb of rows = nb of fish resting
+```
+
+
+## Duration of fish resting per treatment
+
+```{r echo=FALSE, fig.height=5, fig.width=6}
+#figure 4
+ggplot(tmp, aes(x = Treatment, y = Duration_s, fill = Treatment)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.21) +
+  labs(x = "Treatment", y = "Duration of fish resting (s)") +
+  scale_y_continuous(limits = c(0,470), expand = c(0, 0)) +
+  scale_fill_discrete_qualitative(palette = "Set 3") + #https://arxiv.org/pdf/1903.06490.pdf
+  theme_classic()
+#ggsave("figures/resting_total_duration.pdf", width = 6, height = 5)
+```
+
+Results below:
+
+```{r echo=FALSE}
+#double check with values: mean duration of fish resting per treatment
+boris |> 
+  filter(Behavior == "resting") |> 
+  group_by(Treatment) |> 
+  summarise(duration_µ = mean(Duration_s),duration_sd = sd(Duration_s))
+```
+
+
+## Duration of fish resting per treatment per size class
+
+```{r echo=FALSE, fig.height=5, fig.width=10}
+#figure 5
+ggplot(tmp, aes(x = Treatment, y = Duration_s, fill = Treatment)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.21) +
+  facet_grid(cols = vars(Size_class)) +
+  labs(x = "Treatment", y = "Duration of fish resting (s)") +
+  scale_y_continuous(limits = c(0,470), expand = c(0, 0)) +
+  scale_fill_discrete_qualitative(palette = "Set 3") + #https://arxiv.org/pdf/1903.06490.pdf
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#ggsave("figures/resting_duration_per_sizeclass.pdf", width = 10, height = 5)
+```
+
+Results below:
+
+```{r echo=FALSE}
+#double check with values: mean duration of fish resting per treatment per size class
+boris |> 
+  filter(Behavior == "resting") |> 
+  group_by(Size_class, Treatment) |> 
+  summarise(duration_µ = mean(Duration_s),duration_sd = sd(Duration_s))
+```
+
+
+## Duration of fish resting per treatment per size class per dial phase
+
+```{r echo=FALSE, fig.height=7, fig.width=7}
+#figure 6
+ggplot(tmp, aes(x = Treatment, y = Duration_s, fill = Treatment)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.21) +
+  facet_grid(vars(Size_class), vars(Dial_phase)) +
+  labs(x = "Treatment", y = "Duration of fish resting (s)") +
+  scale_y_continuous(limits = c(0,470), expand = c(0, 0)) +
+  scale_fill_discrete_qualitative(palette = "Set 3") + #https://arxiv.org/pdf/1903.06490.pdf
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+#ggsave("figures/resting_duration_per_sizeclass_and_dial_phase.pdf", width = 7, height = 7)
+```
+
+Results below:
+
+```{r echo=FALSE}
+#double check with values: mean duration of fish resting per treatment per size class per dial phase
+boris |> 
+  filter(Behavior == "resting") |> 
+  group_by(Size_class, Dial_phase, Treatment) |> 
+  summarise(duration_µ = mean(Duration_s),duration_sd = sd(Duration_s))
+```
+

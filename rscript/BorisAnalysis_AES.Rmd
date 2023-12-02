@@ -1,0 +1,187 @@
+---
+title: "Boris Analysis - 2023 dataset"
+author: "Anna Steel"
+date: "11/28/2023"
+output: html_document
+---
+
+```{r setup}
+library(tidyverse)
+library(lme4)
+library(patchwork)
+library(chron)
+library(MuMIn)
+
+```
+  
+  
+## Read in Dataset  
+This code was started with only r1,r2,r3 from Camera 2 (Nov 28, 2023)
+```{r read data, echo=F}
+dat.raw = read.csv("/Users/Anna/Documents/ResearchGit/Treadmill/BORIS/rawdata/BORIS_large_dataset_r1r2r3_nameedit.csv")
+
+```
+
+```{r reduce columns and melt into shape}
+
+dat.pre = dat.raw %>% 
+  select(!c(Source, Media_duration_s, FPS_frame.s, Subject, 
+            Observation_duration.by.subject.by.observation,
+            Behavior_type, Media_file_name, Trial_ID_cam4, 
+            Comment_start, Comment_stop)) %>%
+  mutate(BehaviorID=paste(Video_File_Name, Start_s))
+
+ 
+dat.contact = dat.pre %>%
+  filter(Behavioral_category!="resting") %>%
+  pivot_wider(names_from = Behavioral_category, values_from = Behavior) %>%
+  mutate(resting=NA)
+
+dat.rest = dat.pre %>%
+  filter(Behavioral_category=="resting") %>%
+  rename(resting = Behavioral_category) %>%
+  select(-Behavior) %>%
+  mutate(bodypart=NA, contacts=NA, orientation=NA)
+
+dat.rest = dat.rest[,names(dat.contact)] # reorganize to match
+
+dat = rbind(dat.rest, dat.contact)
+
+dat = arrange(dat, Date, Diel_phase, Trial_Letter, Start_s)
+
+dat$Treatment = factor(dat$Treatment, levels=c("0A_0S", "0.2A_0.8S", "0.2A_2S", "0.4A_0.8S", "0.4A_2S"))
+```
+
+#### A Few Interesting Things:
+- There are a total of 1967 records in these first three replicated trials that do not have orientation but DO have bodypart and contact
+    - For example, Video 2023Aug14_1220PM_C doesn't have any orientation data collected
+
+
+## Exploring the contacts
+
+### Total contact rate
+```{r contact rate}
+sumdat = dat %>%
+  mutate(treatID = paste(Size_class, Diel_phase, Treatment, sep="_")) %>%
+  group_by(treatID, Size_class, Diel_phase, Treatment, Replicate) %>%
+  summarize(ncontact = n())
+
+contact_rate.v1 = ggplot(sumdat, aes(x=factor(Diel_phase), y=ncontact, fill=Treatment))+
+  geom_boxplot() + 
+  scale_fill_manual(values=c("grey80","coral2","skyblue","brown3","steelblue3")) +
+  ylab("N contacts per trial") + xlab("Diel Phase") + 
+  facet_grid(Size_class~.) +
+  theme_bw() #+ theme(axis.text.x = element_text(angle=45, vjust=.85, hjust=1))
+
+contact_rate.v1 # + geom_vline(xintercept = 1.5, lty="dashed")
+
+
+contact_rate.v2 = ggplot(sumdat, aes(x=factor(Treatment), y=ncontact, fill=Diel_phase))+
+  geom_boxplot() + 
+  #scale_fill_manual(values=c("grey80","coral2","skyblue","brown3","steelblue3")) +
+  ylab("N contacts per trial") + xlab("Diel Phase") + 
+  facet_grid(Size_class~.) +
+  theme_bw() #+ theme(axis.text.x = element_text(angle=45, vjust=.85, hjust=1))
+
+contact_rate.v2  + geom_vline(xintercept = c(1.5, 2.5, 3.5, 4.5), lty="dashed", alpha=.5)
+
+```
+
+
+### Body/Head/Tail
+```{r body-head-tail contacts}
+sumdat.body = dat %>%
+  filter(!is.na(bodypart)) %>%
+  group_by(Video_File_Name, Date, Diel_phase, Trial_Letter, Camera, 
+           Size_class, Replicate, Treatment, Water_Temp_Tread, bodypart) %>%
+  summarize(Freq=n()) %>%
+  data.frame()
+
+
+
+body.small = ggplot(filter(sumdat.body, Size_class=="Small"), 
+                    aes(x=Treatment, y=Freq, fill=Treatment))+
+  geom_boxplot() + 
+  scale_fill_manual(values=c("grey80","coral2","skyblue","brown3","steelblue3"), guide=F) +
+  ylab("N contacts per trial") + xlab("Flow Treatment")+ ggtitle("Contact Type, Small Size Class (6-10cm TL)") + 
+  facet_grid(bodypart~Diel_phase) +
+  theme_bw() + theme(axis.text.x = element_text(angle=45, vjust=.85, hjust=1))
+  
+
+body.medium = ggplot(filter(sumdat.body, Size_class=="Medium"), 
+                    aes(x=Treatment, y=Freq, fill=Treatment))+
+  geom_boxplot() + 
+  scale_fill_manual(values=c("grey80","coral2","skyblue","brown3","steelblue3"), guide=F) +
+  ylab("N contacts per trial") + xlab("Flow Treatment")+ ggtitle("Contact Type, Medium Size Class (11-15cm TL)") + 
+  facet_grid(bodypart~Diel_phase) +
+  theme_bw() + theme(axis.text.x = element_text(angle=45, vjust=.85, hjust=1))
+
+
+body.large = ggplot(filter(sumdat.body, Size_class=="Large"), 
+                    aes(x=Treatment, y=Freq, fill=Treatment))+
+  geom_boxplot() + 
+  scale_fill_manual(values=c("grey80","coral2","skyblue","brown3","steelblue3"), guide=F) +
+  xlab("Flow Treatment")+ 
+  ylab("N contacts per trial") + ggtitle("Contact Type, Large Size Class (16-19cm TL)") + 
+  facet_grid(bodypart~Diel_phase) + 
+  theme_bw() + theme(axis.text.x = element_text(angle=45, vjust=.85, hjust=1))
+
+
+body.small + body.medium + body.large + plot_layout(ncol=3)
+
+
+
+## rearrange thr groupings to highglight bodypart
+
+body.small.b = ggplot(filter(sumdat.body, Size_class=="Small"), 
+                    aes(x=bodypart, y=Freq, fill=bodypart))+
+  geom_boxplot() + 
+  scale_fill_manual(values=c("grey80","coral2","steelblue3"), guide=F) +
+  xlab("Contact Type")+ 
+  ylab("N contacts per trial") + ggtitle("Contact Type, Small Size Class (6-10cm TL)") + 
+  facet_grid(Treatment~Diel_phase) +
+  theme_bw() + theme(axis.text.x = element_text(angle=45, vjust=.85, hjust=1))
+  
+
+body.medium.b = ggplot(filter(sumdat.body, Size_class=="Medium"), 
+                    aes(x=bodypart, y=Freq, fill=bodypart))+
+  geom_boxplot() + 
+  scale_fill_manual(values=c("grey80","coral2","steelblue3"), guide=F) +
+  xlab("Contact Type")+ 
+  ylab("N contacts per trial") + ggtitle("Contact Type, Medium Size Class (11-15cm TL)") + 
+  facet_grid(Treatment~Diel_phase) +
+  theme_bw() + theme(axis.text.x = element_text(angle=45, vjust=.85, hjust=1))
+
+
+body.large.b = ggplot(filter(sumdat.body, Size_class=="Large"), 
+                    aes(x=bodypart, y=Freq, fill=bodypart))+
+  geom_boxplot() + 
+  scale_fill_manual(values=c("grey80","coral2","steelblue3"), guide=F) +
+  xlab("Contact Type")+ 
+  ylab("N contacts per trial") + ggtitle("Contact Type, Large Size Class (16-19cm TL)") + 
+  facet_grid(Treatment~Diel_phase) + 
+  theme_bw() + theme(axis.text.x = element_text(angle=45, vjust=.85, hjust=1))
+
+
+body.small.b + body.medium.b + body.large.b + plot_layout(ncol=3)
+
+```
+
+### Rheotaxis
+```{r rheotaxis}
+
+```
+
+
+### Body part x Rheotaxis
+```{r contact type interaction}
+```
+
+
+### Relationships between contact rates/types and controlled variables
+- temperature in treadmill, mean size per trial, order of trial, temperature difference, more?
+```{r experimental set-up}
+```
+
+
+
